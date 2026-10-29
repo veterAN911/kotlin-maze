@@ -1,2 +1,4 @@
 *.html linguist-documentation
 *.pdf linguist-documentation
+presentation/** linguist-documentation
+examples/** linguist-documentation
