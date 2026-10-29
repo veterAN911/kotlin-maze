@@ -1,0 +1,9 @@
+# Настройки стиля для ktlint (цель make ktlint).
+# clang-format из материалов котлин не разбирает, поэтому стиль котлина проверяет ktlint.
+root = true
+
+[*.{kt,kts}]
+# Compose требует писать компоненты с большой буквы, а ktlint по умолчанию хочет
+# с маленькой. поэтому функции с @Composable из проверки имени выкидываем, иначе
+# придётся переименовать MazeScreen в mazeScreen и будет только хуже
+ktlint_function_naming_ignore_when_annotated_with = Composable

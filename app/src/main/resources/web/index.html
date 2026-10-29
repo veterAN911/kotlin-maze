@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maze — веб</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 24px;
+            background: #f5f5f5;
+            color: #222;
+        }
+        h1 { margin: 0 0 6px; }
+        .sub { color: #666; margin: 0 0 16px; }
+        .controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        .controls input[type="number"] {
+            width: 60px;
+            padding: 6px;
+            font-size: 14px;
+        }
+        button {
+            padding: 10px 18px;
+            font-size: 14px;
+            cursor: pointer;
+            border: none;
+            border-radius: 6px;
+            background: #3f51b5;
+            color: #fff;
+        }
+        button:hover { background: #303f9f; }
+        button:disabled {
+            background: #b0b0b0;
+            cursor: default;
+        }
+        .error { color: #d32f2f; min-height: 20px; margin-bottom: 8px; }
+        .hint { color: #666; min-height: 20px; margin-bottom: 8px; }
+        canvas {
+            background: #fff;
+            border: 1px solid #ccc;
+            display: block;
+            margin: 0 auto;
+            max-width: 100%;
+            cursor: crosshair;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <h1>🧩 Лабиринт (Maze)</h1>
+        <p class="sub">Веб-версия на Vue 3: генерация, файлы и решение — как в десктоп-приложении.</p>
+
+        <div class="controls">
+            <label>Строки: <input type="number" min="1" max="50" v-model.number="rows"></label>
+            <label>Колонки: <input type="number" min="1" max="50" v-model.number="cols"></label>
+            <button @click="generate">Сгенерировать</button>
+            <button @click="pickFile">Загрузить</button>
+            <button @click="save">Сохранить</button>
+        </div>
+
+        <div class="controls">
+            <label>Старт:
+                строка <input type="number" min="1" v-model.number="startRow">
+                столбец <input type="number" min="1" v-model.number="startCol">
+            </label>
+            <label>Финиш:
+                строка <input type="number" min="1" v-model.number="endRow">
+                столбец <input type="number" min="1" v-model.number="endCol">
+            </label>
+            <button @click="toggleSolution" :disabled="!maze">
+                {{ hasSolution ? 'Убрать решение' : 'Показать решение' }}
+            </button>
+        </div>
+
+        <div class="controls">
+            <label>Клик по полю ставит:
+                <select v-model="clickTarget">
+                    <option value="start">старт</option>
+                    <option value="end">финиш</option>
+                </select>
+            </label>
+        </div>
+
+        <div class="error">{{ error }}</div>
+        <div class="hint" v-if="!error">{{ hint }}</div>
+
+        <canvas ref="canvas" width="500" height="500" @click="clickCanvas"></canvas>
+        <input ref="fileInput" type="file" accept=".txt,text/plain" hidden @change="load">
+    </div>
+
+    <script src="/vue.global.prod.js"></script>
+    <script>
+        const { createApp } = Vue;
+
+        const FIELD = 500;   // сторона поля, пиксели
+        const WALL = 2;      // толщина стены
+        const WALL_COLOR = '#2e2e2e';
+        const PATH_COLOR = '#e53935';
+        const START_COLOR = '#2e7d32';
+        const END_COLOR = '#1565c0';
+
+        createApp({
+            data() {
+                return {
+                    rows: 10,
+                    cols: 10,
+                    startRow: 1,
+                    startCol: 1,
+                    endRow: 10,
+                    endCol: 10,
+                    maze: null,
+                    text: '',   // тот же лабиринт только текстом в формате тз
+                    path: [],
+                    clickTarget: 'start',   // что поставит клик по полю
+                    error: '',
+                    hint: 'Лабиринт ещё не готов'
+                };
+            },
+
+            computed: {
+                hasSolution() {
+                    return this.path.length > 0;
+                }
+            },
+
+            mounted() {
+                this.generate();
+            },
+
+            methods: {
+                async send(url, options) {
+                    const answer = await fetch(url, options);
+                    const data = await answer.json();
+                    if (!answer.ok) throw new Error(data.error || 'ошибка сервера');
+                    return data;
+                },
+
+                ready() {
+                    const size = (value) => Number.isInteger(value) && value >= 1 && value <= 50;
+                    if (!size(this.rows) || !size(this.cols)) {
+                        this.error = 'Размеры лабиринта — числа от 1 до 50';
+                        return false;
+                    }
+                    this.error = '';
+                    return true;
+                },
+
+                async generate() {
+                    if (!this.ready()) return;
+                    try {
+                        const data = await this.send('/api/maze?rows=' + this.rows + '&cols=' + this.cols);
+                        this.showMaze(data);
+                    } catch (e) {
+                        this.error = 'Не удалось сгенерировать лабиринт: ' + e.message;
+                    }
+                },
+
+                pickFile() {
+                    this.$refs.fileInput.click();
+                },
+
+                async load(event) {
+                    const file = event.target.files[0];
+                    event.target.value = '';
+                    if (!file) return;
+                    try {
+                        const data = await this.send('/api/maze', {
+                            method: 'POST',
+                            body: await file.text()
+                        });
+                        this.showMaze(data);
+                    } catch (e) {
+                        this.error = 'Не удалось загрузить файл: ' + e.message;
+                    }
+                },
+
+                save() {
+                    if (!this.maze) return;
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(new Blob([this.text], { type: 'text/plain' }));
+                    link.download = 'maze.txt';
+                    link.click();
+                    URL.revokeObjectURL(link.href);
+                },
+
+                async toggleSolution() {
+                    if (this.hasSolution) {
+                        this.path = [];
+                        this.error = '';
+                        this.hint = 'Решение убрано';
+                        return;
+                    }
+                    try {
+                        const values = [this.startRow, this.startCol, this.endRow, this.endCol];
+                        if (values.some(v => !Number.isInteger(v))) {
+                            this.error = 'Координаты точек — целые числа';
+                            return;
+                        }
+                        // человек вводит от единицы а сервер ждёт с нуля
+                        const points = values.map(v => v - 1);
+                        if (points.some(p => p < 0)) {
+                            this.error = 'Координаты точек начинаются с единицы';
+                            return;
+                        }
+                        const query = '?startRow=' + points[0] + '&startCol=' + points[1] +
+                            '&endRow=' + points[2] + '&endCol=' + points[3];
+                        const data = await this.send('/api/solve' + query, {
+                            method: 'POST',
+                            body: this.text
+                        });
+                        this.path = data.path;
+                        this.error = '';
+                        this.hint = data.path.length === 0 ? 'Путь не найден' : 'Маршрут построен';
+                    } catch (e) {
+                        this.path = [];
+                        this.error = 'Не удалось решить лабиринт: ' + e.message;
+                    }
+                },
+
+                showMaze(data) {
+                    this.maze = data.maze;
+                    this.text = data.text;
+                    this.path = [];
+                    this.error = '';
+                    this.hint = 'Лабиринт ' + data.maze.rows + ' x ' + data.maze.cols;
+                    this.startRow = 1;
+                    this.startCol = 1;
+                    this.endRow = data.maze.rows;
+                    this.endCol = data.maze.cols;
+                },
+
+                draw() {
+                    const canvas = this.$refs.canvas;
+                    const ctx = canvas.getContext('2d');
+                    ctx.clearRect(0, 0, FIELD, FIELD);
+                    const maze = this.maze;
+                    if (!maze) return;
+
+                    const cellW = FIELD / maze.cols;
+                    const cellH = FIELD / maze.rows;
+                    const wall = (x1, y1, x2, y2) => {
+                        ctx.beginPath();
+                        ctx.moveTo(x1, y1);
+                        ctx.lineTo(x2, y2);
+                        ctx.stroke();
+                    };
+
+                    ctx.strokeStyle = WALL_COLOR;
+                    ctx.lineWidth = WALL;
+                    wall(0, 0, FIELD, 0);
+                    wall(0, 0, 0, FIELD);
+                    for (let r = 0; r < maze.rows; r++) {
+                        for (let c = 0; c < maze.cols; c++) {
+                            if (maze.verticalWalls[r][c] === 1) {
+                                wall((c + 1) * cellW, r * cellH, (c + 1) * cellW, (r + 1) * cellH);
+                            }
+                            if (maze.horizontalWalls[r][c] === 1) {
+                                wall(c * cellW, (r + 1) * cellH, (c + 1) * cellW, (r + 1) * cellH);
+                            }
+                        }
+                    }
+
+                    if (this.path.length > 0) {
+                        ctx.strokeStyle = PATH_COLOR;
+                        ctx.lineWidth = WALL;
+                        ctx.beginPath();
+                        this.path.forEach((cell, index) => {
+                            const x = (cell[1] + 0.5) * cellW;
+                            const y = (cell[0] + 0.5) * cellH;
+                            if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                        });
+                        ctx.stroke();
+                    }
+
+                    // точки рисуем всегда по введённым координатам, а не только
+                    // когда есть маршрут. иначе кликнул по полю и не видно куда
+                    const dot = (row, col, color) => {
+                        if (!Number.isInteger(row) || !Number.isInteger(col)) return;
+                        if (row < 1 || row > maze.rows || col < 1 || col > maze.cols) return;
+                        ctx.fillStyle = color;
+                        ctx.beginPath();
+                        ctx.arc((col - 0.5) * cellW, (row - 0.5) * cellH, cellW * 0.18, 0, Math.PI * 2);
+                        ctx.fill();
+                    };
+                    dot(this.endRow, this.endCol, END_COLOR);
+                    dot(this.startRow, this.startCol, START_COLOR);
+                },
+
+                // клик по полю ставит ту точку, которую выбрали в списке, и
+                // переписывает поля ввода чтобы оба способа показывали одно и то же
+                clickCanvas(event) {
+                    const maze = this.maze;
+                    if (!maze) return;
+                    const rect = this.$refs.canvas.getBoundingClientRect();
+                    // канвас может быть сжат по ширине окна, поэтому пересчитываем
+                    // пиксели клика обратно в координаты поля
+                    const x = (event.clientX - rect.left) * FIELD / rect.width;
+                    const y = (event.clientY - rect.top) * FIELD / rect.height;
+                    const col = Math.min(maze.cols, Math.max(1, Math.floor(x / (FIELD / maze.cols)) + 1));
+                    const row = Math.min(maze.rows, Math.max(1, Math.floor(y / (FIELD / maze.rows)) + 1));
+                    if (this.clickTarget === 'start') {
+                        this.startRow = row;
+                        this.startCol = col;
+                    } else {
+                        this.endRow = row;
+                        this.endCol = col;
+                    }
+                    // старый маршрут посчитан для прежних точек, убираем
+                    this.path = [];
+                    this.error = '';
+                }
+            },
+
+            watch: {
+                maze() { this.draw(); },
+                path() { this.draw(); },
+                startRow() { this.draw(); },
+                startCol() { this.draw(); },
+                endRow() { this.draw(); },
+                endCol() { this.draw(); }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
